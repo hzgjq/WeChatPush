@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+
+#获取工作目录
+BaseDir="$(cd $(dirname "$0"); pwd -P)"
+#默认配置文件
+ConfigFile="/usr/local/etc/wechat.conf"
+
+#初始化默认参数
+function Initialization() {
+#运行时参数
+	CURL_CMD="/usr/bin/env curl -s"
+	Retry="3"
+	Interval="3"
+	AccessTokenFile="/tmp/wechat.access.token"
+#微信API接口
+	URL_API="https://api.weixin.qq.com/cgi-bin"
+	URL_Token="<URL_API>/token?grant_type=client_credential&appid=<WeChatAppID>&secret=<WeChatAppSecret>"
+	URL_User="<URL_API>/user/get?access_token=<AccessToken>"
+	URL_Message="<URL_API>/message/template/send?access_token=<AccessToken>"
+	PostStructure="{\"touser\":\"<Openid>\",\"template_id\":\"<WeChatTemplateID>\",\"topcolor\":\"#FF0000\",\"data\":<Message>,\"url\":\"<Url>\"}"
+
+#公众号配置
+	WeChatAppID=""
+	WeChatAppSecret=""
+	WeChatTemplateID=""
+	WeChatUserList=""
+#实例信息
+	ExampleMessage="{\"Source\":{\"color\":\"#0000CD\",\"value\":\"测试主机\"},\"Type\":{\"color\":\"#0000CD\",\"value\":\"提醒\"},\"Overview\":{\"value\":\"概况\"},\"Details\":{\"value\":\"详情\"}}"
+	ExampleUrl="http://www.baidu.com"
+}
+
+#显示使用说明
+function Usage() {
+	echo -e "                ----==== \033[1;32m微信公众号消息推送脚本\033[0m ====----\n"
+	[[ -n "${2}" ]] && echo -e "[\033[1;37m参数错误\033[0m] ${2}\n"
+	echo -e "使用说明:"
+	echo -e "  ${0} [选项] <推送内容> [链接地址]\n"
+	echo -e "如果已经将脚本路径加入到环境变量，也可使用："
+	echo -e "  ${0##*/} [选项] <推送内容> [链接地址]\n"
+	echo -e "命令选项解析\n\n参数:"
+	echo -e " -c, --config <文件路径>        加载指定配置文件，如使用了\"-C\"则该选项无效"
+	echo -e " -C, --default                  不加载配置文件，而是使用内置的参数"
+	echo -e " -e, --example                  推送内置或配置文件指定的实例信息"
+	echo
+	echo -e " -l, --curl <文件路径>          使用指定的 curl 命令"
+	echo -e " -r, --retry <数字>             失败重试次数(仅申请访问令牌时)"
+	echo -e " -i, --interval <数字>          重试间隔时间(秒)"
+	echo -e " -f, --token <文件路径>         访问令牌保存位置"
+	echo
+	echo -e " -a, --appid <字符串>           推送时使用的公众号AppID"
+	echo -e " -s, --secret <字符串>          推送时使用的公众号AppSecret"
+	echo -e " -t, --template <字符串>        推送时使用的公众号TemplateID"
+	echo -e " -u, --userlist <字符串>        推送用户列表，用\",\"进行分割"
+	echo
+	echo -e " -A, --url-api <字符串>         微信公众号API接口地址"
+	echo -e " -T, --url-token <字符串>       微信公众号访问令牌接口地址"
+	echo -e " -U, --url-user <字符串>        微信公众号用户列表接口地址"
+	echo -e " -M, --url-message <字符串>     微信公众号消息推送接口地址"
+	echo -e " -S, --structure <字符串>       微信公众号消息推送数据结构"
+	echo
+	echo -e " -h, --help                     显示当前内容并退出"
+	echo -e "\n参数优先级说明:\n"
+	echo -e " 命令行参数优先级最高，其次是配置文件，脚本内置参数优先级最低。"
+	echo -e " 如果重复设置了参数值，将会以优先级高的值为准。在优先级相同的情况"
+	echo -e " 下，例如在命令行中重复设置了--appid 参数，则以最后设置的值为准。\n"
+	exit ${1}
+}
+
+#分析命令行参数
+function ParseParameters() {
+	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:r:s:S:t:T:u:U: -al config:,default,test,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,help -n "${0##*/}" -- "$@" 2>&1)"
+	[[ ${?} != "0" ]] && Usage 1 "${Parameters%\'*}'"
+}
+
+#加载配置文件
+function GetConfig() {
+	eval set -- "${Parameters}"
+	while [[ -n ${1} ]]; do
+		case ${1} in
+		-c|-config|--config)
+			shift; [[ -n "${1}" ]] && ConfigFile="${1}" ;;
+		-C|-default|--default)
+			Default="YES" ;;
+		esac; shift
+	done
+	[[ "${Default}" == "YES" ]] && ConfigFile=""
+	if [[ -n "${ConfigFile}" ]]; then
+		[[ ${ConfigFile:0:1} == "/" ]] || ConfigFile="${BaseDir}/${ConfigFile}"
+		[[ -r "${ConfigFile}" ]] && while read line; do eval "$line"; done < "${ConfigFile}" || echo -e " [\033[1;33m提醒\033[0m] 读取配置文件\"${ConfigFile}\"失败，使用默认参数。"
+	fi
+}
+
+#设置命令行参数
+function GetParameters() {
+	eval set -- "${Parameters}"
+	while [[ -n ${1} ]]; do
+		case ${1} in
+		-l|-curl|--curl)
+			shift
+			CURL_CMD="$1"
+			;;
+		-r|-retry|--retry)
+			shift
+			Retry="$1"
+			;;
+		-i|-interval|--interval)
+			shift
+			Interval="$1"
+			;;
+		-f|-token|--token)
+			shift
+			AccessTokenFile="$1"
+			;;
+		-a|-appid|--appid)
+			shift
+			WeChatAppID="$1"
+			;;
+		-s|-secret|--secret)
+			shift
+			WeChatAppSecret="$1"
+			;;
+		-t|-template|--template)
+			shift
+			WeChatTemplateID="$1"
+			;;
+		-u|-userlist|--userlist)
+			shift
+			WeChatUserList="$1"
+			;;
+		-A|-url-api|--url-api)
+			shift
+			URL_API="$1"
+			;;
+		-T|-url-token|--url-token)
+			shift
+			URL_Token="$1"
+			;;
+		-U|-url-user|--url-user)
+			shift
+			URL_User="$1"
+			;;
+		-M|-url-message|--url-message)
+			shift
+			URL_Message="$1"
+			;;
+		-e|-example|--example)
+			Example="YES"
+			;;
+		-h|-help|--help)
+			Usage
+			;;
+		--)
+			shift
+			break
+			;;
+		esac
+		shift
+	done
+	if [[ -z "${Example}" ]]; then
+		[[ -n "${1}" ]] && Message="${1}"
+		[[ -n "${2}" ]] && Url="${2}"
+	else
+		Message="${ExampleMessage}"
+		Url="${ExampleUrl}"
+	fi
+	[[ -z "${Message}" ]] && Usage 2 "请输入推送内容！"
+}
+
+#访问API接口
+function APIVisit() {
+	APIResult="$(${CURL_CMD} -H "Content-Type:application/json" -X POST --data "${2}" "${1/<URL_API>/$URL_API}")"
+	ErrCode="$(expr "${APIResult}" : ".*\"errcode\"\:\([^,]*\),.*")"
+	ErrMsg="$(expr "${APIResult}" : ".*\"errmsg\"\:\"\([^\"]*\)\".*")"
+	[[ -z "${ErrCode}" ]] && ErrCode="0"
+	#echo -e "\n=============================\n${APIResult}\n============================="
+}
+
+#申请访问令牌
+function GetAccessToken() {
+	URL_Token="${URL_Token/<WeChatAppID>/$WeChatAppID}"
+	URL_Token="${URL_Token/<WeChatAppSecret>/$WeChatAppSecret}"
+	APIVisit "${URL_Token}"
+	AccessToken="$(expr "${APIResult}" : ".*\"access_token\"\:\"\([^\"]*\)\".*")"
+	[[ "${ErrCode}" != "0" ]] && echo -e " [\033[1;31m信息\033[0m] 申请访问令牌失败！" && exit 3
+	echo -e " [\033[1;37m信息\033[0m] 申请访问令牌成功。"
+	echo -n "${AccessToken}" > "${AccessTokenFile}"
+}
+
+#获取API结果
+function GetAPIResult() {
+	for i in $(eval echo "{1..${Retry}}"); do
+		APIVisit "${1/<AccessToken>/$AccessToken}" "${2}"
+		[[ "${ErrCode}" == "0" ]] && return
+		[[ "${ErrCode}" != "40001" ]] && break
+		echo -e " [\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
+		sleep ${Interval}
+		GetAccessToken
+	done
+	echo -e " [\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 4
+}
+
+#获取用户列表
+function GetUserList() {
+	GetAPIResult "${URL_User}"
+	WeChatUserList="$(expr "${APIResult}" : ".*\"openid\"\:\[\"\([^]]*\)\"].*")"
+	WeChatUserList=${WeChatUserList//\"/ }
+}
+
+#发送模板消息
+function SendMessage() {
+	PostData="${PostStructure}"
+	PostData="${PostData/<WeChatTemplateID>/$WeChatTemplateID}"
+	PostData="${PostData/<Openid>/$Openid}"
+	PostData="${PostData/<Message>/$Message}"
+	PostData="${PostData/<Url>/$Url}"
+	GetAPIResult "${URL_Message}" "${PostData}"
+	if [[ "${ErrCode}" == "0" ]]; then
+		echo -e " [\033[1;32m成功\033[0m] 向用户\"${Openid}\"发送消息。"
+	else
+		echo -e " [\033[1;31m失败\033[0m] 向用户\"${Openid}\"发送消息。"
+	fi
+}
+
+#加载默认参数
+Initialization
+#解析命令参数
+ParseParameters "$@"
+#加载配置文件
+GetConfig
+#加载命令参数
+GetParameters
+
+if [ -f "${AccessTokenFile}" ]; then
+	PreviousTime="$(stat -c %Y ${AccessTokenFile})"
+	CurrentTime="$(date +%s)"
+	if [[ "$[${CurrentTime}-${PreviousTime}]" -gt 3600 ]]; then
+		GetAccessToken
+	else
+		AccessToken="$(cat "${AccessTokenFile}")"
+	fi
+else
+	GetAccessToken
+fi
+
+[[ "${WeChatUserList}" == "" ]] && GetUserList
+UserList=(${WeChatUserList//,/ })
+for Openid in ${UserList[@]}; do
+	SendMessage
+done
