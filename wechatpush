@@ -4,7 +4,7 @@ Version="1.00"
 #获取工作目录
 BaseDir="$(cd $(dirname "$0"); pwd -P)"
 #默认配置文件
-ConfigFile="/usr/local/etc/wechat.conf"
+ConfigFile="wechatp.conf"
 
 #初始化默认参数
 function Initialization() {
