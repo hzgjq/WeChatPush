@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
+Version="1.00"
 #获取工作目录
 BaseDir="$(cd $(dirname "$0"); pwd -P)"
 #默认配置文件
-ConfigFile="wechatpush.conf"
+ConfigFile="/usr/local/etc/wechat.conf"
 
 #初始化默认参数
 function Initialization() {
@@ -58,6 +59,7 @@ function Usage() {
 	echo -e " -M, --url-message <字符串>     微信公众号消息推送接口地址"
 	echo -e " -S, --structure <字符串>       微信公众号消息推送数据结构"
 	echo
+	echo -e " -v, --version                  显示脚本的版本并退出"
 	echo -e " -h, --help                     显示当前内容并退出"
 	echo -e "\n参数优先级说明:\n"
 	echo -e " 命令行参数优先级最高，其次是配置文件，脚本内置参数优先级最低。"
@@ -68,7 +70,7 @@ function Usage() {
 
 #分析命令行参数
 function ParseParameters() {
-	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:r:s:S:t:T:u:U: -al config:,default,test,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,help -n "${0##*/}" -- "$@" 2>&1)"
+	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:r:s:S:t:T:u:U:v -al config:,default,test,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,version,help -n "${0##*/}" -- "$@" 2>&1)"
 	[[ ${?} != "0" ]] && Usage 1 "${Parameters%\'*}'"
 }
 
@@ -150,6 +152,10 @@ function GetParameters() {
 		-e|-example|--example)
 			Example="YES"
 			;;
+		-v|-version|--version)
+			echo "${0##*/} V ${Version}"
+			exit
+			;;
 		-h|-help|--help)
 			Usage
 			;;
@@ -193,13 +199,16 @@ function GetAccessToken() {
 #获取API结果
 function GetAPIResult() {
 	for i in $(eval echo "{1..${Retry}}"); do
+		[[ -n "${ErrStatus}" ]] && echo -e "${ErrStatus}"
 		APIVisit "${1/<AccessToken>/$AccessToken}" "${2}"
-		[[ "${ErrCode}" == "0" ]] && return
-		[[ "${ErrCode}" != "40001" ]] && break
-		echo -e " [\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
+		[[ "${ErrCode}" == "0" ]] && ErrStatus="" && return
 		sleep ${Interval}
+		[[ "${ErrCode}" == "-1" ]] && ErrStatus=" [\033[1;33m警告\033[0m] 服务器正忙，正在重试。" && continue
+		[[ "${ErrCode}" != "40001" ]] && break
+		ErrStatus=" [\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
 		GetAccessToken
 	done
+	ErrStatus=""
 	echo -e " [\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 4
 }
 
