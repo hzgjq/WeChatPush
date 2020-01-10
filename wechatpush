@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 
-Version="1.00"
+Version="1.01"
 #获取工作目录
 BaseDir="$(cd $(dirname "$0"); pwd -P)"
 #默认配置文件
-ConfigFile="wechatp.conf"
+ConfigFile="wechatpush.conf"
 
 #初始化默认参数
 function Initialization() {
 #运行时参数
-	CURL_CMD="/usr/bin/env curl -s"
+	CURL_CMD="/usr/sbin/curl -s"
 	Retry="3"
-	Interval="3"
+	Interval="1"
 	AccessTokenFile="/tmp/wechat.access.token"
 #微信API接口
 	URL_API="https://api.weixin.qq.com/cgi-bin"
@@ -26,7 +26,7 @@ function Initialization() {
 	WeChatTemplateID=""
 	WeChatUserList=""
 #实例信息
-	ExampleMessage="{\"Source\":{\"color\":\"#0000CD\",\"value\":\"测试主机\"},\"Type\":{\"color\":\"#0000CD\",\"value\":\"提醒\"},\"Overview\":{\"value\":\"概况\"},\"Details\":{\"value\":\"详情\"}}"
+	ExampleMessage="{\"Time\":{\"color\":\"#0000CC\",\"value\":\"测试时间\"},\"Source\":{\"color\":\"#00CC00\",\"value\":\"测试主机\"},\"Type\":{\"color\":\"#CC0000\",\"value\":\"提醒\"},\"Overview\":{\"color\":\"#0000CC\",\"value\":\"概况\"},\"Details\":{\"color\":\"#00CC00\",\"value\":\"详情\"}}"
 	ExampleUrl="http://www.baidu.com"
 }
 
@@ -41,6 +41,7 @@ function Usage() {
 	echo -e "命令选项解析\n\n参数:"
 	echo -e " -c, --config <文件路径>        加载指定配置文件，如使用了\"-C\"则该选项无效"
 	echo -e " -C, --default                  不加载配置文件，而是使用内置的参数"
+	echo -e " -q, --quiet                    静默模式，不显示脚本运行状态"
 	echo -e " -e, --example                  推送内置或配置文件指定的实例信息"
 	echo
 	echo -e " -l, --curl <文件路径>          使用指定的 curl 命令"
@@ -68,16 +69,21 @@ function Usage() {
 	exit ${1}
 }
 
-#分析命令行参数
+#分析命令参数
 function ParseParameters() {
-	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:r:s:S:t:T:u:U:v -al config:,default,test,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,version,help -n "${0##*/}" -- "$@" 2>&1)"
+	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:qr:s:S:t:T:u:U:v -al config:,default,quiet,example,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,version,help -n "${0##*/}" -- "$@" 2>&1)"
 	[[ ${?} != "0" ]] && Usage 1 "${Parameters%\'*}'"
+}
+
+#显示运行状态
+function ShowStatus() {
+	[[ -z "${Quiet}" ]] && echo -e "${1}"
 }
 
 #加载配置文件
 function GetConfig() {
 	eval set -- "${Parameters}"
-	while [[ -n ${1} ]]; do
+	while [[ -n "${1}" ]]; do
 		case ${1} in
 		-c|-config|--config)
 			shift; [[ -n "${1}" ]] && ConfigFile="${1}" ;;
@@ -87,16 +93,22 @@ function GetConfig() {
 	done
 	[[ "${Default}" == "YES" ]] && ConfigFile=""
 	if [[ -n "${ConfigFile}" ]]; then
-		[[ ${ConfigFile:0:1} == "/" ]] || ConfigFile="${BaseDir}/${ConfigFile}"
-		[[ -r "${ConfigFile}" ]] && while read line; do eval "$line"; done < "${ConfigFile}" || echo -e " [\033[1;33m提醒\033[0m] 读取配置文件\"${ConfigFile}\"失败，使用默认参数。"
+		[[ -n ${ConfigFile%%/*} ]] && ConfigFile="${BaseDir}/${ConfigFile}"
+		[[ -r "${ConfigFile}" ]] && while read line; do eval "$line"; done < "${ConfigFile}" || ShowStatus "[\033[1;33m提醒\033[0m] 读取配置文件\"${ConfigFile}\"失败，使用默认参数。"
 	fi
 }
 
-#设置命令行参数
+#设置运行参数
 function GetParameters() {
 	eval set -- "${Parameters}"
 	while [[ -n ${1} ]]; do
 		case ${1} in
+		-q|-quiet|--quiet)
+			Quiet="YES"
+			;;
+		-e|-example|--example)
+			Example="YES"
+			;;
 		-l|-curl|--curl)
 			shift
 			CURL_CMD="$1"
@@ -149,9 +161,6 @@ function GetParameters() {
 			shift
 			PostStructure="$1"
 			;;
-		-e|-example|--example)
-			Example="YES"
-			;;
 		-v|-version|--version)
 			echo "${0##*/} V ${Version}"
 			exit
@@ -182,7 +191,6 @@ function APIVisit() {
 	ErrCode="$(expr "${APIResult}" : ".*\"errcode\"\:\([^,]*\),.*")"
 	ErrMsg="$(expr "${APIResult}" : ".*\"errmsg\"\:\"\([^\"]*\)\".*")"
 	[[ -z "${ErrCode}" ]] && ErrCode="0"
-	#echo -e "\n=============================\n${APIResult}\n============================="
 }
 
 #申请访问令牌
@@ -191,25 +199,35 @@ function GetAccessToken() {
 	URL_Token="${URL_Token/<WeChatAppSecret>/$WeChatAppSecret}"
 	APIVisit "${URL_Token}"
 	AccessToken="$(expr "${APIResult}" : ".*\"access_token\"\:\"\([^\"]*\)\".*")"
-	[[ "${ErrCode}" != "0" ]] && echo -e " [\033[1;31m信息\033[0m] 申请访问令牌失败！" && exit 3
-	echo -e " [\033[1;37m信息\033[0m] 申请访问令牌成功。"
-	echo -n "${AccessToken}" > "${AccessTokenFile}"
+	[[ "${ErrCode}" != "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 申请访问令牌失败！" && exit 3
+	ShowStatus "[\033[1;37m信息\033[0m] 申请访问令牌成功。"
+	echo -n "${AccessToken} $(date +%s)" > "${AccessTokenFile}"
 }
 
 #获取API结果
 function GetAPIResult() {
-	for i in $(eval echo "{1..${Retry}}"); do
-		[[ -n "${ErrStatus}" ]] && echo -e "${ErrStatus}"
+	try="0"
+	while [[ "${try}" -le "${Retry}" ]]; do
+		try="$((${try}+1))"
+		[[ -n "${Status}" ]] && ShowStatus "${Status}" && sleep ${Interval}
 		APIVisit "${1/<AccessToken>/$AccessToken}" "${2}"
-		[[ "${ErrCode}" == "0" ]] && ErrStatus="" && return
-		sleep ${Interval}
-		[[ "${ErrCode}" == "-1" ]] && ErrStatus=" [\033[1;33m警告\033[0m] 服务器正忙，正在重试。" && continue
-		[[ "${ErrCode}" != "40001" ]] && break
-		ErrStatus=" [\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
-		GetAccessToken
+		Status=""
+		case "${ErrCode}" in
+		-1)
+			Status="[\033[1;33m警告\033[0m] 服务器正忙，正在重试。"
+			;;
+		0)
+			break
+			;;
+		40001)
+			ShowStatus "[\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
+			GetAccessToken
+			;;
+		*)
+			ShowStatus "[\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 4
+			;;
+		esac
 	done
-	ErrStatus=""
-	echo -e " [\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 4
 }
 
 #获取用户列表
@@ -228,12 +246,11 @@ function SendMessage() {
 	PostData="${PostData/<Url>/$Url}"
 	GetAPIResult "${URL_Message}" "${PostData}"
 	if [[ "${ErrCode}" == "0" ]]; then
-		echo -e " [\033[1;32m成功\033[0m] 向用户\"${Openid}\"发送消息。"
+		ShowStatus "[\033[1;32m成功\033[0m] 向用户\"${Openid}\"发送消息。"
 	else
-		echo -e " [\033[1;31m失败\033[0m] 向用户\"${Openid}\"发送消息。"
+		ShowStatus "[\033[1;31m失败\033[0m] 向用户\"${Openid}\"发送消息。"
 	fi
 }
-
 #加载默认参数
 Initialization
 #解析命令参数
@@ -243,20 +260,20 @@ GetConfig
 #加载命令参数
 GetParameters
 
-if [ -f "${AccessTokenFile}" ]; then
-	PreviousTime="$(stat -c %Y ${AccessTokenFile})"
-	CurrentTime="$(date +%s)"
-	if [[ "$[${CurrentTime}-${PreviousTime}]" -gt 3600 ]]; then
+if [[ -f "${AccessTokenFile}" ]]; then
+	AccessToken="$(cat "${AccessTokenFile}") 0"
+	if [[ "$(( $(date +%s) - $(echo "${AccessToken}" | cut -d ' ' -f 2) ))" -gt 7200 ]]; then
+		ShowStatus "[\033[1;33m提醒\033[0m] 访问令牌已过期，正在重新申请。"
 		GetAccessToken
 	else
-		AccessToken="$(cat "${AccessTokenFile}")"
+		AccessToken="${AccessToken%% *}"
 	fi
 else
 	GetAccessToken
 fi
 
-[[ "${WeChatUserList}" == "" ]] && GetUserList
-UserList=(${WeChatUserList//,/ })
-for Openid in ${UserList[@]}; do
+[[ -z "${WeChatUserList}" ]] && GetUserList
+UserList="${WeChatUserList//,/ }"
+for Openid in ${UserList}; do
 	SendMessage
 done
