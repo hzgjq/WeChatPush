@@ -8,6 +8,7 @@
 找到`新增测试模板`，添加模板消息    
 填写模板标题`服务器状态报告`，填写如下模板内容    
 ``` conf
+{{Time.DATA}}
 来自{{Source.DATA}}的{{Type.DATA}}：
 {{Overview.DATA}}
 
