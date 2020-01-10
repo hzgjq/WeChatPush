@@ -9,7 +9,7 @@ ConfigFile="wechatpush.conf"
 #初始化默认参数
 function Initialization() {
 #运行时参数
-	CURL_CMD="/usr/sbin/curl -s"
+	CURL_CMD="/usr/bin/env curl -s"
 	Retry="3"
 	Interval="1"
 	AccessTokenFile="/tmp/wechat.access.token"
