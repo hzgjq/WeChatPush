@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
-Version="1.01"
+Version="1.02"
 #获取工作目录
 BaseDir="$(cd $(dirname "$0"); pwd -P)"
 #默认配置文件
@@ -9,7 +9,7 @@ ConfigFile="wechatpush.conf"
 #初始化默认参数
 function Initialization() {
 #运行时参数
-	CURL_CMD="/usr/bin/env curl -s"
+	CURL_CMD="/usr/sbin/curl -s"
 	Retry="3"
 	Interval="1"
 	AccessTokenFile="/tmp/wechat.access.token"
@@ -72,7 +72,7 @@ function Usage() {
 #分析命令参数
 function ParseParameters() {
 	Parameters="$(getopt -o a:A:c:Cef:hi:l:M:qr:s:S:t:T:u:U:v -al config:,default,quiet,example,curl:,retry:,interval:,token:,appid:,secret:,template:,userlist:,url-api:,url-token:,url-user:,url-message:,structure:,version,help -n "${0##*/}" -- "$@" 2>&1)"
-	[[ ${?} != "0" ]] && Usage 1 "${Parameters%\'*}'"
+	[[ ${?} -ne "0" ]] && Usage 1 "${Parameters%\'*}'"
 }
 
 #显示运行状态
@@ -88,10 +88,9 @@ function GetConfig() {
 		-c|-config|--config)
 			shift; [[ -n "${1}" ]] && ConfigFile="${1}" ;;
 		-C|-default|--default)
-			Default="YES" ;;
+			ConfigFile="" && break ;;
 		esac; shift
 	done
-	[[ "${Default}" == "YES" ]] && ConfigFile=""
 	if [[ -n "${ConfigFile}" ]]; then
 		[[ -n ${ConfigFile%%/*} ]] && ConfigFile="${BaseDir}/${ConfigFile}"
 		[[ -r "${ConfigFile}" ]] && while read line; do eval "$line"; done < "${ConfigFile}" || ShowStatus "[\033[1;33m提醒\033[0m] 读取配置文件\"${ConfigFile}\"失败，使用默认参数。"
@@ -195,12 +194,13 @@ function APIVisit() {
 
 #申请访问令牌
 function GetAccessToken() {
+	ShowStatus "[\033[1;37m信息\033[0m] 开始申请访问令牌。"
 	URL_Token="${URL_Token/<WeChatAppID>/$WeChatAppID}"
 	URL_Token="${URL_Token/<WeChatAppSecret>/$WeChatAppSecret}"
 	APIVisit "${URL_Token}"
 	AccessToken="$(expr "${APIResult}" : ".*\"access_token\"\:\"\([^\"]*\)\".*")"
-	[[ "${ErrCode}" != "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 申请访问令牌失败！" && exit 3
-	ShowStatus "[\033[1;37m信息\033[0m] 申请访问令牌成功。"
+	[[ "${ErrCode}" -ne "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 申请访问令牌失败！" && exit 3
+	ShowStatus "[\033[1;32m成功\033[0m] 申请访问令牌成功。"
 	echo -n "${AccessToken} $(date +%s)" > "${AccessTokenFile}"
 }
 
@@ -220,7 +220,7 @@ function GetAPIResult() {
 			break
 			;;
 		40001)
-			ShowStatus "[\033[1;33m警告\033[0m] 访问令牌有误，正在重新申请。"
+			ShowStatus "[\033[1;33m警告\033[0m] 访问令牌有误，需要重新申请。"
 			GetAccessToken
 			;;
 		*)
@@ -232,23 +232,26 @@ function GetAPIResult() {
 
 #获取用户列表
 function GetUserList() {
+	ShowStatus "[\033[1;37m信息\033[0m] 开始获取用户列表。"
 	GetAPIResult "${URL_User}"
+	[[ "${ErrCode}" -ne "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 获取用户列表失败！" && exit 3
 	WeChatUserList="$(expr "${APIResult}" : ".*\"openid\"\:\[\"\([^]]*\)\"].*")"
 	WeChatUserList=${WeChatUserList//\"/ }
 }
 
-#发送模板消息
-function SendMessage() {
+#推送模板消息
+function PushMessage() {
+	ShowStatus "[\033[1;37m信息\033[0m] 向用户\"${Openid}\"推送消息。"
 	PostData="${PostStructure}"
 	PostData="${PostData/<WeChatTemplateID>/$WeChatTemplateID}"
 	PostData="${PostData/<Openid>/$Openid}"
 	PostData="${PostData/<Message>/$Message}"
 	PostData="${PostData/<Url>/$Url}"
 	GetAPIResult "${URL_Message}" "${PostData}"
-	if [[ "${ErrCode}" == "0" ]]; then
-		ShowStatus "[\033[1;32m成功\033[0m] 向用户\"${Openid}\"发送消息。"
+	if [[ "${ErrCode}" -eq "0" ]]; then
+		SendSuccessList="${SendSuccessList}\n\t${Openid}"
 	else
-		ShowStatus "[\033[1;31m失败\033[0m] 向用户\"${Openid}\"发送消息。"
+		SendFailedList="${SendFailedList}\n\t${Openid}"
 	fi
 }
 #加载默认参数
@@ -263,17 +266,25 @@ GetParameters
 if [[ -f "${AccessTokenFile}" ]]; then
 	AccessToken="$(cat "${AccessTokenFile}") 0"
 	if [[ "$(( $(date +%s) - $(echo "${AccessToken}" | cut -d ' ' -f 2) ))" -gt 7200 ]]; then
-		ShowStatus "[\033[1;33m提醒\033[0m] 访问令牌已过期，正在重新申请。"
+		ShowStatus "[\033[1;33m提醒\033[0m] 访问令牌已过期，需要重新申请。"
 		GetAccessToken
 	else
 		AccessToken="${AccessToken%% *}"
 	fi
 else
 	GetAccessToken
+	chmod 777 "${AccessTokenFile}"
 fi
 
 [[ -z "${WeChatUserList}" ]] && GetUserList
 UserList="${WeChatUserList//,/ }"
 for Openid in ${UserList}; do
-	SendMessage
+	PushMessage
 done
+
+if [[ -z "${SendFailedList}" ]];then
+	ShowStatus "[\033[1;32m成功\033[0m] 向所有用户推送消息成功。"
+else
+	[[ -n "${SendSuccessList}" ]] && ShowStatus "[\033[1;32m成功\033[0m] 推送消息成功的用户: ${SendSuccessList}"
+	ShowStatus "[\033[1;31m失败\033[0m] 推送消息失败的用户: ${SendFailedList}"
+fi
