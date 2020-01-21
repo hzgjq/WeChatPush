@@ -181,7 +181,7 @@ function GetParameters() {
 		Message="${ExampleMessage}"
 		Url="${ExampleUrl}"
 	fi
-	[[ -z "${Message}" ]] && Usage 2 "请输入推送内容！"
+	[[ -z "${Message}" ]] && Usage 1 "请输入推送内容！"
 }
 
 #访问API接口
@@ -224,7 +224,7 @@ function GetAPIResult() {
 			GetAccessToken
 			;;
 		*)
-			ShowStatus "[\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 4
+			ShowStatus "[\033[1;31m错误\033[1;37m ${ErrCode}\033[0m] ${ErrMsg}" && exit 2
 			;;
 		esac
 	done
@@ -234,7 +234,7 @@ function GetAPIResult() {
 function GetUserList() {
 	ShowStatus "[\033[1;37m信息\033[0m] 开始获取用户列表。"
 	GetAPIResult "${URL_User}"
-	[[ "${ErrCode}" -ne "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 获取用户列表失败！" && exit 3
+	[[ "${ErrCode}" -ne "0" ]] && ShowStatus "[\033[1;31m错误\033[0m] 获取用户列表失败！" && exit 4
 	WeChatUserList="$(expr "${APIResult}" : ".*\"openid\"\:\[\"\([^]]*\)\"].*")"
 	WeChatUserList=${WeChatUserList//\"/ }
 }
@@ -284,7 +284,13 @@ done
 
 if [[ -z "${SendFailedList}" ]];then
 	ShowStatus "[\033[1;32m成功\033[0m] 向所有用户推送消息成功。"
+	ExitCode="0"
+elif [[ -z "${SendSuccessList}" ]]; then
+	ShowStatus "[\033[1;31m失败\033[0m] 向所有用户推送消息失败。"
+	ExitCode="5"
 else
-	[[ -n "${SendSuccessList}" ]] && ShowStatus "[\033[1;32m成功\033[0m] 推送消息成功的用户: ${SendSuccessList}"
-	ShowStatus "[\033[1;31m失败\033[0m] 推送消息失败的用户: ${SendFailedList}"
+	ShowStatus "[\033[1;32m成功\033[0m] 推送消息成功的用户: ${SendSuccessList}"
+	ShowStatus "[\033[1;33m提醒\033[0m] 推送消息失败的用户: ${SendFailedList}"
+	ExitCode="0"
 fi
+exit "${ExitCode}"
